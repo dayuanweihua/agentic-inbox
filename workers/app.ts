@@ -2,6 +2,13 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
+/**
+ * [INPUT]: Cloudflare Worker HTTP requests and ForwardableEmailMessage events; Env bindings and Access secrets
+ * [OUTPUT]: Authenticated Hono API, React Router fallback, MCP/Agent routes, inbound email and scheduled Gmail sync
+ * [POS]: workers 模块入口，负责 Access 边界与 HTTP/Email/Cron 生命周期编排
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
+
 import { routeAgentRequest } from "agents";
 import { Hono } from "hono";
 import { jwtVerify, createRemoteJWKSet } from "jose";
@@ -9,6 +16,7 @@ import { createRequestHandler } from "react-router";
 import { app as apiApp, receiveEmail } from "./index";
 import { EmailMCP } from "./mcp";
 import type { Env } from "./types";
+import { getGmailStatus, syncGmailSent } from "./lib/gmail";
 
 export { MailboxDO } from "./durableObject";
 export { EmailAgent } from "./agent";
@@ -111,7 +119,7 @@ app.all("*", (c) => {
 export default {
 	fetch: app.fetch,
 	async email(
-		event: { raw: ReadableStream; rawSize: number },
+		event: ForwardableEmailMessage,
 		env: Env,
 		ctx: ExecutionContext,
 	) {
@@ -123,5 +131,16 @@ export default {
 			// Swallowing the error would silently drop the email.
 			throw e;
 		}
+	},
+	async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+		ctx.waitUntil(
+			(async () => {
+				const status = await getGmailStatus(env);
+				if (!status.configured || !status.connected) return;
+				await syncGmailSent(env);
+			})().catch((error) => {
+				console.error("Scheduled Gmail sync failed:", (error as Error).message);
+			}),
+		);
 	},
 };

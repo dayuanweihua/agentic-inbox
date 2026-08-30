@@ -2,6 +2,13 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
+/**
+ * [INPUT]: Browser fetch API, shared frontend Email/Folder/Mailbox types
+ * [OUTPUT]: Typed API client for mailbox, email, folder, search and Gmail synchronization operations
+ * [POS]: app/services 的唯一 HTTP client，供路由和查询层调用 Worker API
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
+
 import type { Email, Folder, Mailbox } from "~/types";
 
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -92,12 +99,35 @@ interface EmailListResponse {
 	totalCount: number;
 }
 
+export interface GmailSyncStatus {
+	configured: boolean;
+	connected: boolean;
+	email: string;
+	mailboxIds: string[];
+	connectedAt: string | null;
+	lastSyncedAt: string | null;
+}
+
+export interface GmailSyncResult {
+	imported: number;
+	skipped: number;
+	lastSyncedAt: string;
+}
+
 // ---------- API client ----------
 
 const api = {
 	// Config
 	getConfig: () =>
 		get<{ domains: string[]; emailAddresses: string[] }>("/api/v1/config"),
+
+	// Gmail Sent sync
+	getGmailSyncStatus: () =>
+		get<GmailSyncStatus>("/api/v1/integrations/gmail/status"),
+	syncGmailSent: () =>
+		post<GmailSyncResult>("/api/v1/integrations/gmail/sync"),
+	disconnectGmail: () =>
+		del<void>("/api/v1/integrations/gmail"),
 
 	// Mailboxes
 	listMailboxes: () => get<Mailbox[]>("/api/v1/mailboxes"),

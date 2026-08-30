@@ -13,13 +13,36 @@
 		// Production deploys must also define POLICY_AUD and TEAM_DOMAIN.
 		// TEAM_DOMAIN may be the base Access URL or the full /cdn-cgi/access/certs URL.
 		// The worker now fails closed outside local development if Access is not configured.
-		"DOMAINS": "example.com",
-		"EMAIL_ADDRESSES": []
+		"DOMAINS": "appetipix.com,testmic.io,vizmuse.com",
+		"EMAIL_ADDRESSES": [
+			"support@appetipix.com",
+			"support@testmic.io",
+			"support@vizmuse.com",
+			"james@vizmuse.com"
+		],
+		"FORWARD_TO_EMAIL": "keaidejim@gmail.com",
+		"GOOGLE_CLIENT_ID": "953063607063-c7hmqb24d91kj25lc1deg50001t4g1m4.apps.googleusercontent.com",
+		"GMAIL_SYNC_EMAIL": "keaidejim@gmail.com",
+		"GMAIL_SYNC_MAILBOX_IDS": [
+			"support@appetipix.com",
+			"support@testmic.io",
+			"support@vizmuse.com",
+			"james@vizmuse.com"
+		]
+	},
+	"triggers": {
+		"crons": ["*/5 * * * *"]
 	},
 	"send_email": [
 		{
 			"name": "EMAIL",
-			"remote": true
+			"remote": true,
+			"allowed_sender_addresses": [
+				"support@appetipix.com",
+				"support@testmic.io",
+				"support@vizmuse.com",
+				"james@vizmuse.com"
+			]
 		}
 	],
 	"r2_buckets": [

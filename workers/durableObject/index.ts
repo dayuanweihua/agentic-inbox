@@ -2,6 +2,13 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
+/**
+ * [INPUT]: Mailbox API commands, parsed email records, SQLite storage and R2 attachment metadata
+ * [OUTPUT]: Durable Object methods for mailbox folders, emails, threads, attachments, rate limits and idempotency
+ * [POS]: workers/durableObject 模块的数据持久化边界，每个 mailboxId 一个独立实例
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
+
 import { DurableObject } from "cloudflare:workers";
 import { drizzle } from "drizzle-orm/durable-sqlite";
 import { eq, and, or, asc, desc, sql } from "drizzle-orm";
@@ -558,6 +565,47 @@ export class MailboxDO extends DurableObject<Env> {
 			.run();
 
 		return emailAttachments;
+	}
+
+	async hasEmailByMessageId(messageId: string) {
+		const row = this.db
+			.select({ id: schema.emails.id })
+			.from(schema.emails)
+			.where(eq(schema.emails.message_id, messageId))
+			.limit(1)
+			.get();
+		return !!row;
+	}
+
+	async createEmailIfMessageIdMissing(
+		folder: string,
+		email: EmailData,
+		attachments: AttachmentData[],
+	) {
+		if (email.message_id) {
+			const existing = this.db
+				.select({ id: schema.emails.id })
+				.from(schema.emails)
+				.where(eq(schema.emails.message_id, email.message_id))
+				.limit(1)
+				.get();
+			if (existing) return false;
+		}
+		await this.createEmail(folder, email, attachments);
+		return true;
+	}
+
+	async findThreadByMessageIds(messageIds: string[]) {
+		for (const messageId of messageIds) {
+			const row = this.db
+				.select({ id: schema.emails.id, thread_id: schema.emails.thread_id })
+				.from(schema.emails)
+				.where(eq(schema.emails.message_id, messageId))
+				.limit(1)
+				.get();
+			if (row) return row.thread_id || row.id;
+		}
+		return null;
 	}
 
 	async getAttachment(id: string) {

@@ -1,3 +1,7 @@
 # Cloudflare Access (required in production). TEAM_DOMAIN may be the base Access URL or the full /cdn-cgi/access/certs URL.
 POLICY_AUD=your-access-policy-audience-tag
 TEAM_DOMAIN=https://your-team.cloudflareaccess.com
+# Optional local email forwarding destination. Use a verified address for real forwarding.
+FORWARD_TO_EMAIL=keaidejim@gmail.com
+# Google OAuth client secret. Store production value with: npx wrangler secret put GOOGLE_CLIENT_SECRET
+GOOGLE_CLIENT_SECRET=your-google-oauth-client-secret

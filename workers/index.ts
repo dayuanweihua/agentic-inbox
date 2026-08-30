@@ -2,6 +2,13 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
+/**
+ * [INPUT]: Cloudflare email events, API requests, Google OAuth callbacks, Env bindings, Durable Objects and R2
+ * [OUTPUT]: Mailbox/Gmail integration API plus inbound parsing, routing, persistence, Gmail forwarding and AI draft triggers
+ * [POS]: workers 模块核心业务层，连接邮件入口与 Mailbox Durable Object
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
+
 import { type Context, Hono } from "hono";
 import { cors } from "hono/cors";
 import PostalMime from "postal-mime";
@@ -20,6 +27,14 @@ import { handleReplyEmail, handleForwardEmail } from "./routes/reply-forward";
 import { Folders } from "../shared/folders";
 import type { Env } from "./types";
 import { requireMailbox, type MailboxContext } from "./lib/mailbox";
+import {
+	completeGmailAuthorization,
+	createGmailAuthorizationUrl,
+	disconnectGmail,
+	getGmailMailboxIds,
+	getGmailStatus,
+	syncGmailSent,
+} from "./lib/gmail";
 
 type AppContext = Context<MailboxContext>;
 
@@ -90,6 +105,51 @@ app.get("/api/v1/config", (c) => {
 	const domains = domainsRaw.split(",").map((d) => d.trim()).filter(Boolean);
 	const emailAddresses = c.env.EMAIL_ADDRESSES ?? [];
 	return c.json({ domains, emailAddresses });
+});
+
+// -- Gmail Sent sync -----------------------------------------------
+
+app.get("/api/v1/integrations/gmail/status", async (c) => {
+	return c.json(await getGmailStatus(c.env));
+});
+
+app.get("/api/v1/integrations/gmail/connect", async (c) => {
+	const mailboxId = c.req.query("mailboxId") || "";
+	try {
+		return c.redirect(await createGmailAuthorizationUrl(c.env, c.req.url, mailboxId));
+	} catch (error) {
+		return c.json({ error: (error as Error).message }, 400);
+	}
+});
+
+app.get("/api/v1/integrations/gmail/callback", async (c) => {
+	const code = c.req.query("code");
+	const state = c.req.query("state");
+	const error = c.req.query("error");
+	const fallbackMailboxId = getGmailMailboxIds(c.env)[0] || "";
+	if (error || !code || !state) {
+		return c.redirect(`/mailbox/${encodeURIComponent(fallbackMailboxId)}/settings?gmail=error`);
+	}
+	try {
+		const mailboxId = await completeGmailAuthorization(c.env, c.req.url, code, state);
+		return c.redirect(`/mailbox/${encodeURIComponent(mailboxId)}/settings?gmail=connected`);
+	} catch (authorizationError) {
+		console.error("Gmail authorization failed:", (authorizationError as Error).message);
+		return c.redirect(`/mailbox/${encodeURIComponent(fallbackMailboxId)}/settings?gmail=error`);
+	}
+});
+
+app.post("/api/v1/integrations/gmail/sync", async (c) => {
+	try {
+		return c.json(await syncGmailSent(c.env));
+	} catch (error) {
+		return c.json({ error: (error as Error).message }, 400);
+	}
+});
+
+app.delete("/api/v1/integrations/gmail", async (c) => {
+	await disconnectGmail(c.env);
+	return c.body(null, 204);
 });
 
 // -- Mailboxes ------------------------------------------------------
@@ -345,28 +405,49 @@ async function streamToArrayBuffer(stream: ReadableStream, streamSize: number) {
 	return result;
 }
 
-async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env: Env, ctx: ExecutionContext) {
+async function receiveEmail(event: ForwardableEmailMessage, env: Env, ctx: ExecutionContext) {
+	const mailboxId = event.to.trim().toLowerCase();
+	if (!mailboxId || !mailboxId.includes("@")) throw new Error("received email with invalid envelope recipient");
+
+	const allowedAddresses = ((env.EMAIL_ADDRESSES ?? []) as string[])
+		.map((a) => a.trim().toLowerCase())
+		.filter(Boolean);
+	if (allowedAddresses.length === 0) {
+		throw new Error("EMAIL_ADDRESSES must contain at least one allowed mailbox");
+	}
+	if (!allowedAddresses.includes(mailboxId)) {
+		console.log(`Ignoring email: envelope recipient is not in EMAIL_ADDRESSES (${mailboxId}).`);
+		return;
+	}
+	if (!env.FORWARD_TO_EMAIL?.trim()) {
+		throw new Error("FORWARD_TO_EMAIL is required for inbound email forwarding");
+	}
+
+	if (!(await env.BUCKET.head(`mailboxes/${mailboxId}.json`))) {
+		console.log(`Ignoring email for ${mailboxId}: mailbox does not exist`);
+		return;
+	}
+
 	const rawEmail = await streamToArrayBuffer(event.raw, event.rawSize);
 	const parsedEmail = await new PostalMime().parse(rawEmail);
 
-	if (!parsedEmail.to?.length || !parsedEmail.to[0].address) throw new Error("received email with empty to");
-
-	const allowedAddresses = ((env.EMAIL_ADDRESSES ?? []) as string[]).map((a) => a.toLowerCase());
-	const allRecipients = parsedEmail.to.map((t) => t.address?.toLowerCase()).filter(Boolean) as string[];
+	const headerRecipients = (parsedEmail.to || [])
+		.map((t) => t.address?.toLowerCase())
+		.filter(Boolean) as string[];
+	const allRecipients = Array.from(new Set([mailboxId, ...headerRecipients]));
 	const ccRecipients = (parsedEmail.cc || []).map((e) => e.address?.toLowerCase()).filter(Boolean) as string[];
 	const bccRecipients = (parsedEmail.bcc || []).map((e) => e.address?.toLowerCase()).filter(Boolean) as string[];
 
-	let mailboxId: string | undefined;
-	if (allowedAddresses.length > 0) {
-		mailboxId = allRecipients.find((addr) => allowedAddresses.includes(addr));
-		if (!mailboxId) { console.log(`Ignoring email: no recipient matches EMAIL_ADDRESSES.`); return; }
-	} else { mailboxId = allRecipients[0]; }
-	if (!mailboxId) throw new Error("received email with no valid recipient address");
+	const stub = env.MAILBOX.get(env.MAILBOX.idFromName(mailboxId));
+	const extractMsgId = (s: string) => { const m = s.match(/<([^>]+)>/); return m ? m[1] : s.trim().split(/\s+/)[0]; };
+	const originalMessageId = parsedEmail.messageId ? extractMsgId(parsedEmail.messageId) : null;
+	if (originalMessageId && await (stub as any).hasEmailByMessageId(originalMessageId)) {
+		console.log(`Skipping duplicate archived email ${originalMessageId}; forwarding retry to Gmail.`);
+		await event.forward(env.FORWARD_TO_EMAIL.trim());
+		return;
+	}
 
 	const messageId = crypto.randomUUID();
-	if (!(await env.BUCKET.head(`mailboxes/${mailboxId}.json`))) { console.log(`Ignoring email for ${mailboxId}: mailbox does not exist`); return; }
-
-	const stub = env.MAILBOX.get(env.MAILBOX.idFromName(mailboxId));
 
 	const attachmentData: StoredAttachment[] = [];
 	if (parsedEmail.attachments) {
@@ -380,7 +461,6 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 		}
 	}
 
-	const extractMsgId = (s: string) => { const m = s.match(/<([^>]+)>/); return m ? m[1] : s.trim().split(/\s+/)[0]; };
 	const inReplyTo = parsedEmail.inReplyTo ? extractMsgId(parsedEmail.inReplyTo) : null;
 	const emailReferences = parsedEmail.references ? parsedEmail.references.split(/\s+/).filter(Boolean).map(extractMsgId) : [];
 	let threadId = emailReferences[0] || inReplyTo || messageId;
@@ -389,8 +469,6 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 		const subjectThread = await (stub as any).findThreadBySubject(parsedEmail.subject || "", parsedEmail.from?.address || undefined);
 		if (subjectThread) threadId = subjectThread;
 	}
-
-	const originalMessageId = parsedEmail.messageId ? extractMsgId(parsedEmail.messageId) : null;
 
 	await stub.createEmail(Folders.INBOX, {
 		id: messageId, subject: parsedEmail.subject || "",
@@ -401,6 +479,8 @@ async function receiveEmail(event: { raw: ReadableStream; rawSize: number }, env
 		in_reply_to: inReplyTo, email_references: emailReferences.length > 0 ? JSON.stringify(emailReferences) : null,
 		thread_id: threadId, message_id: originalMessageId, raw_headers: JSON.stringify(parsedEmail.headers),
 	}, attachmentData);
+
+	await event.forward(env.FORWARD_TO_EMAIL.trim());
 
 	const agentStub = env.EMAIL_AGENT.get(env.EMAIL_AGENT.idFromName(mailboxId));
 	ctx.waitUntil(agentStub.fetch(new Request("https://agents/onNewEmail", {

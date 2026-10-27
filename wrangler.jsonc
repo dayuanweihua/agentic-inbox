@@ -13,7 +13,7 @@
 		// Production deploys must also define POLICY_AUD and TEAM_DOMAIN.
 		// TEAM_DOMAIN may be the base Access URL or the full /cdn-cgi/access/certs URL.
 		// The worker now fails closed outside local development if Access is not configured.
-		"DOMAINS": "appetipix.com,testmic.io,vizmuse.com,wheelswap.app,ezvideo.ai,whosemove.com,mvgenerator.com",
+		"DOMAINS": "appetipix.com,testmic.io,vizmuse.com,wheelswap.app,ezvideo.ai,whosemove.com,mvgenerator.com,kdafirestarterdanceai.com",
 		"EMAIL_ADDRESSES": [
 			"support@appetipix.com",
 			"support@testmic.io",
@@ -25,7 +25,9 @@
 			"james@whosemove.com",
 			"support@whosemove.com",
 			"james@mvgenerator.com",
-			"support@mvgenerator.com"
+			"support@mvgenerator.com",
+			"james@kdafirestarterdanceai.com",
+			"support@kdafirestarterdanceai.com"
 		],
 		"FORWARD_TO_EMAIL": "keaidejim@gmail.com",
 		"GOOGLE_CLIENT_ID": "953063607063-c7hmqb24d91kj25lc1deg50001t4g1m4.apps.googleusercontent.com",
@@ -41,7 +43,9 @@
 			"james@whosemove.com",
 			"support@whosemove.com",
 			"james@mvgenerator.com",
-			"support@mvgenerator.com"
+			"support@mvgenerator.com",
+			"james@kdafirestarterdanceai.com",
+			"support@kdafirestarterdanceai.com"
 		]
 	},
 	"triggers": {
@@ -62,7 +66,9 @@
 				"james@whosemove.com",
 				"support@whosemove.com",
 				"james@mvgenerator.com",
-				"support@mvgenerator.com"
+				"support@mvgenerator.com",
+				"james@kdafirestarterdanceai.com",
+				"support@kdafirestarterdanceai.com"
 			]
 		}
 	],
